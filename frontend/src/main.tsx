@@ -22,6 +22,7 @@ type PositionInfo = {
   next_token: TokenInfo;
   topk: Record<ModelKey, TopItem[] | null>;
   attn: { t1: number[][][]; t2: number[][][] };
+  value_weighted_attn: { t1: number[][][]; t2: number[][][] };
   losses: Record<ModelKey, number | null>;
   bigram_available: boolean;
   match_index: number | null;
@@ -33,31 +34,73 @@ type AnalysisResponse = {
   tokens: TokenInfo[];
   positions: PositionInfo[];
   device: string;
+  t1_layers: number;
+  t1_heads: number;
+  t2_layers: number;
+  t2_heads: number;
 };
 
 function TokenStrip({
   tokens,
   active,
   onHover,
+  attentionData,
+  selectedModel,
+  selectedLayer,
+  selectedHead,
 }: {
   tokens: TokenInfo[];
   active: number | null;
   onHover: (index: number | null) => void;
+  attentionData: { t1: number[][][]; t2: number[][][] } | null;
+  selectedModel: "t1" | "t2";
+  selectedLayer: number;
+  selectedHead: number;
 }) {
+  // Calculate attention scores for each token using selected head
+  const getTokenAttentionScore = (tokenIdx: number): number => {
+    if (!attentionData || active === null || active <= 0) return 0;
+    
+    const modelData = attentionData[selectedModel];
+    if (!modelData || !modelData[selectedLayer] || !modelData[selectedLayer][selectedHead]) {
+      return 0;
+    }
+    
+    const headAttention = modelData[selectedLayer][selectedHead];
+    return headAttention[tokenIdx] || 0;
+  };
+
+  // Calculate max attention for normalization
+  const maxAttention = Math.max(
+    ...tokens.map((_, idx) => getTokenAttentionScore(idx))
+  );
+
   return (
     <div style={{ lineHeight: 1.8, wordBreak: "break-word", userSelect: "none" }}>
       {tokens.map((tok, idx) => {
         const disabled = idx === 0;
         const isActive = active === idx;
+        const attentionScore = getTokenAttentionScore(idx);
+        const normalizedAttention = maxAttention > 0 ? attentionScore / maxAttention : 0;
+        
+        // Create attention-based background color
+        const attentionColor = `rgba(255, 100, 100, ${normalizedAttention * 0.3})`;
+        
         return (
           <span
             key={idx}
-            title={disabled ? "bos" : `position ${idx}`}
+            title={disabled ? "bos" : `position ${idx} (attention: ${attentionScore.toFixed(3)})`}
             onMouseEnter={() => (disabled ? undefined : onHover(idx))}
             onMouseLeave={() => (disabled ? undefined : onHover(null))}
             style={{
               padding: "2px 1px",
-              background: isActive ? "rgba(0,160,255,.2)" : disabled ? undefined : "rgba(0,160,255,.05)",
+              background: isActive 
+                ? "rgba(0,160,255,.2)" 
+                : disabled 
+                  ? undefined 
+                  : attentionData 
+                    ? attentionColor
+                    : "rgba(0,160,255,.05)",
               cursor: disabled ? "default" : "pointer",
               borderBottom: disabled
                 ? undefined
@@ -130,15 +173,22 @@ function TopkPanel({ position }: { position: PositionInfo }) {
 function AttnPanel({
   label,
   attn,
+  valueWeightedAttn,
+  showValueWeighted,
 }: {
   label: string;
   attn: number[][][];
+  valueWeightedAttn: number[][][];
+  showValueWeighted: boolean;
 }) {
+  const dataToShow = showValueWeighted ? valueWeightedAttn : attn;
+  const suffix = showValueWeighted ? " (value-weighted)" : "";
+  
   return (
     <div>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontWeight: 600, marginBottom: 8 }}>{label}{suffix}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-        {attn.map((layer, layerIdx) =>
+        {dataToShow.map((layer, layerIdx) =>
           layer.map((head, headIdx) => (
             <Heatmap
               key={`${label}-${layerIdx}-${headIdx}`}
@@ -167,6 +217,105 @@ function MatchInfo({ position }: { position: PositionInfo }) {
   );
 }
 
+function AttentionHeadSelector({
+  analysis,
+  selectedModel,
+  selectedLayer,
+  selectedHead,
+  onModelChange,
+  onLayerChange,
+  onHeadChange,
+}: {
+  analysis: AnalysisResponse;
+  selectedModel: "t1" | "t2";
+  selectedLayer: number;
+  selectedHead: number;
+  onModelChange: (model: "t1" | "t2") => void;
+  onLayerChange: (layer: number) => void;
+  onHeadChange: (head: number) => void;
+}) {
+  const layers = selectedModel === "t1" ? analysis.t1_layers : analysis.t2_layers;
+  const heads = selectedModel === "t1" ? analysis.t1_heads : analysis.t2_heads;
+
+  console.log('layers', layers);
+  console.log('heads', heads);
+  console.log('selectedModel', selectedModel);
+  console.log('selectedLayer', selectedLayer);
+  console.log('selectedHead', selectedHead);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14 }}>Attention Head Selector</div>
+      
+      {/* Model Selection */}
+      <div style={{ display: "flex", gap: 8 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input
+            type="radio"
+            checked={selectedModel === "t1"}
+            onChange={() => onModelChange("t1")}
+          />
+          <span>Transformer L1</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <input
+            type="radio"
+            checked={selectedModel === "t2"}
+            onChange={() => onModelChange("t2")}
+          />
+          <span>Transformer L2</span>
+        </label>
+      </div>
+
+      {/* Layer Selection */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>Layer:</span>
+        {Array.from({ length: layers }, (_, i) => (
+          <button
+            key={i}
+            onClick={() => onLayerChange(i)}
+            style={{
+              padding: "4px 8px",
+              fontSize: 12,
+              border: "1px solid rgba(0,0,0,.2)",
+              borderRadius: 4,
+              background: selectedLayer === i ? "rgba(0,160,255,.2)" : "white",
+              cursor: "pointer",
+            }}
+          >
+            L{i}
+          </button>
+        ))}
+      </div>
+
+      {/* Head Selection */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+        <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>Head:</span>
+        {Array.from({ length: heads }, (_, i) => (
+          <button
+            key={i}
+            onClick={() => onHeadChange(i)}
+            style={{
+              padding: "4px 8px",
+              fontSize: 12,
+              border: "1px solid rgba(0,0,0,.2)",
+              borderRadius: 4,
+              background: selectedHead === i ? "rgba(0,160,255,.2)" : "white",
+              cursor: "pointer",
+            }}
+          >
+            H{i}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.7 }}>
+        Selected: {selectedModel.toUpperCase()} Layer {selectedLayer} Head {selectedHead}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [text, setText] = useState("Once upon a time, Alice followed a white rabbit.");
   const [topK, setTopK] = useState(10);
@@ -174,6 +323,10 @@ function App() {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showValueWeighted, setShowValueWeighted] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<"t1" | "t2">("t1");
+  const [selectedLayer, setSelectedLayer] = useState(0);
+  const [selectedHead, setSelectedHead] = useState(0);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -215,7 +368,7 @@ function App() {
 
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ marginBottom: 16 }}>Induction Viz</h1>
+      <h1 style={{ marginBottom: 16 }}>Induction Heads 🎉</h1>
       <div style={{ display: "flex", flexDirection: "row", gap: 24, alignItems: "start" }}>
         <pre>{JSON.stringify(analysis, null, 2)}</pre>
         <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 24 }}>
@@ -233,11 +386,25 @@ function App() {
             <span>top-k</span>
             <input
               type="number"
-              min={1}
+              // min={1}
               value={topK}
               onChange={(evt) => setTopK(parseInt(evt.target.value, 10) || 1)}
             />
           </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={showValueWeighted}
+              onChange={(evt) => setShowValueWeighted(evt.target.checked)}
+            />
+            <span>Show value-weighted attention</span>
+          </label>
+          {showValueWeighted && (
+            <div style={{ fontSize: 12, opacity: 0.7, fontStyle: "italic" }}>
+              Value-weighted attention shows attention weights scaled by the norm of value vectors, 
+              indicating "how big a vector is moved from each position"
+            </div>
+          )}
           <button
             type="submit"
             disabled={loading}
@@ -259,10 +426,28 @@ function App() {
 
       {analysis && (
         <div style={{ display: "grid", gap: 24 }}>
+          <AttentionHeadSelector
+            analysis={analysis}
+            selectedModel={selectedModel}
+            selectedLayer={selectedLayer}
+            selectedHead={selectedHead}
+            onModelChange={setSelectedModel}
+            onLayerChange={setSelectedLayer}
+            onHeadChange={setSelectedHead}
+          />
           <div style={{ border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, padding: 16 }}>
-            <TokenStrip tokens={analysis.tokens} active={activeIdx} onHover={setActiveIdx} />
+            <TokenStrip 
+              tokens={analysis.tokens} 
+              active={activeIdx} 
+              onHover={setActiveIdx}
+              attentionData={activePosition?.attn || null}
+              selectedModel={selectedModel}
+              selectedLayer={selectedLayer}
+              selectedHead={selectedHead}
+            />
             <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
-              hover a token (after the first) to inspect predictions
+              hover a token (after the first) to inspect predictions. 
+              {" Red background shows attention from the active position."}
             </div>
           </div>
 
@@ -274,10 +459,20 @@ function App() {
               </div>
               <MatchInfo position={activePosition} />
               <TopkPanel position={activePosition} />
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-                <AttnPanel label="Attention L1" attn={activePosition.attn.t1} />
-                <AttnPanel label="Attention L2" attn={activePosition.attn.t2} />
-              </div>
+              {/* <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+                <AttnPanel 
+                  label="Attention L1" 
+                  attn={activePosition.attn.t1} 
+                  valueWeightedAttn={activePosition.value_weighted_attn.t1}
+                  showValueWeighted={showValueWeighted}
+                />
+                <AttnPanel 
+                  label="Attention L2" 
+                  attn={activePosition.attn.t2} 
+                  valueWeightedAttn={activePosition.value_weighted_attn.t2}
+                  showValueWeighted={showValueWeighted}
+                />
+              </div> */}
             </>
           ) : (
             <div style={{ opacity: 0.7 }}>hover a token to see logits & attention</div>
