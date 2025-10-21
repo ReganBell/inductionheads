@@ -40,10 +40,19 @@ type AnalysisResponse = {
   t2_heads: number;
 };
 
+type AblationResult = {
+  with_head: TopItem[];
+  without_head: TopItem[];
+  delta_positive: TopItem[];
+  delta_negative: TopItem[];
+};
+
 function TokenStrip({
   tokens,
   active,
   onHover,
+  onClick,
+  locked,
   attentionData,
   selectedModel,
   selectedLayer,
@@ -52,6 +61,8 @@ function TokenStrip({
   tokens: TokenInfo[];
   active: number | null;
   onHover: (index: number | null) => void;
+  onClick: (index: number) => void;
+  locked: number | null;
   attentionData: { t1: number[][][]; t2: number[][][] } | null;
   selectedModel: "t1" | "t2";
   selectedLayer: number;
@@ -79,37 +90,54 @@ function TokenStrip({
     <div style={{ lineHeight: 1.8, wordBreak: "break-word", userSelect: "none" }}>
       {tokens.map((tok, idx) => {
         const disabled = idx === 0;
+        const isLocked = locked === idx;
         const isActive = active === idx;
         const attentionScore = getTokenAttentionScore(idx);
         const normalizedAttention = maxAttention > 0 ? attentionScore / maxAttention : 0;
-        
+
         // Create attention-based background color
         const attentionColor = `rgba(255, 100, 100, ${normalizedAttention * 0.3})`;
-        
+
         return (
           <span
             key={idx}
-            title={disabled ? "bos" : `position ${idx} (attention: ${attentionScore.toFixed(3)})`}
-            onMouseEnter={() => (disabled ? undefined : onHover(idx))}
-            onMouseLeave={() => (disabled ? undefined : onHover(null))}
+            title={disabled ? "bos" : `position ${idx} (attention: ${attentionScore.toFixed(3)}) - click to lock`}
+            onMouseEnter={() => (disabled || locked !== null ? undefined : onHover(idx))}
+            onMouseLeave={() => (disabled || locked !== null ? undefined : onHover(null))}
+            onClick={() => disabled ? undefined : onClick(idx)}
             style={{
               padding: "2px 1px",
-              background: isActive 
-                ? "rgba(0,160,255,.2)" 
-                : disabled 
-                  ? undefined 
-                  : attentionData 
+              background: isActive
+                ? isLocked
+                  ? "rgba(46, 207, 139, .25)"  // Green tint when locked
+                  : "rgba(0,160,255,.2)"
+                : disabled
+                  ? undefined
+                  : attentionData
                     ? attentionColor
                     : "rgba(0,160,255,.05)",
               cursor: disabled ? "default" : "pointer",
               borderBottom: disabled
                 ? undefined
                 : isActive
-                ? "2px solid rgba(0,160,255,.8)"
+                ? isLocked
+                  ? "2px solid #2ECF8B"  // Green border when locked
+                  : "2px solid rgba(0,160,255,.8)"
                 : "1px dashed rgba(0,160,255,.35)",
+              position: "relative",
             }}
           >
             {tok.text || "␠"}
+            {isLocked && (
+              <span style={{
+                fontSize: 10,
+                marginLeft: 2,
+                opacity: 0.7,
+                verticalAlign: "super"
+              }}>
+                🔒
+              </span>
+            )}
           </span>
         );
       })}
@@ -217,6 +245,97 @@ function MatchInfo({ position }: { position: PositionInfo }) {
   );
 }
 
+function AblationPanel({
+  ablation,
+  onClose,
+}: {
+  ablation: AblationResult;
+  onClose: () => void;
+}) {
+  const panels: { key: keyof AblationResult; title: string; description: string }[] = [
+    { key: "with_head", title: "With Head", description: "Top predictions with the head active" },
+    { key: "without_head", title: "Without Head", description: "Top predictions with the head ablated" },
+    { key: "delta_positive", title: "Most Helped (+Δ)", description: "Tokens most promoted by this head" },
+    { key: "delta_negative", title: "Most Hurt (−Δ)", description: "Tokens most suppressed by this head" },
+  ];
+
+  return (
+    <div style={{
+      border: "2px solid #2ECF8B",
+      borderRadius: 10,
+      padding: 20,
+      background: "#FCFCFC",
+      position: "relative",
+    }}>
+      <button
+        onClick={onClose}
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          background: "rgba(0,0,0,.05)",
+          border: "1px solid rgba(0,0,0,.1)",
+          borderRadius: 4,
+          padding: "4px 8px",
+          cursor: "pointer",
+          fontSize: 12,
+        }}
+      >
+        Close
+      </button>
+
+      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>
+        Head Ablation Analysis
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+        {panels.map((panel) => {
+          const data = ablation[panel.key];
+          return (
+            <div
+              key={panel.key}
+              style={{
+                border: "1px solid rgba(0,0,0,.1)",
+                borderRadius: 8,
+                padding: 14,
+                background: "white",
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>
+                {panel.title}
+              </div>
+              <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 10 }}>
+                {panel.description}
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {data.map((item, idx) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      fontFamily: "monospace",
+                      fontSize: 13,
+                    }}
+                  >
+                    <span>{idx + 1}. {item.token || "␠"}</span>
+                    <span style={{ opacity: 0.7 }}>
+                      {panel.key.startsWith("delta")
+                        ? `Δ${item.logit >= 0 ? "+" : ""}${item.logit.toFixed(2)}`
+                        : `p=${item.prob.toFixed(4)}`
+                      }
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AttentionHeadSelector({
   analysis,
   selectedModel,
@@ -316,24 +435,82 @@ function AttentionHeadSelector({
   );
 }
 
+function AblateHeadButton({
+  onClick,
+  loading,
+  disabled,
+  position,
+  model,
+  layer,
+  head,
+}: {
+  onClick: () => void;
+  loading: boolean;
+  disabled: boolean;
+  position?: number;
+  model: string;
+  layer: number;
+  head: number;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <button
+        onClick={onClick}
+        disabled={loading || disabled}
+        style={{
+          padding: "10px 16px",
+          borderRadius: 6,
+          border: "1px solid #2ECF8B",
+          background: loading || disabled ? "rgba(0,0,0,.1)" : "#2ECF8B",
+          color: loading || disabled ? "rgba(0,0,0,.4)" : "white",
+          fontWeight: 600,
+          cursor: loading || disabled ? "not-allowed" : "pointer",
+          fontSize: 14,
+        }}
+      >
+        {loading ? "Analyzing..." : "Ablate Selected Head"}
+      </button>
+      {position !== undefined && (
+        <div style={{ fontSize: 12, opacity: 0.7 }}>
+          Will analyze {model.toUpperCase()} L{layer}H{head} at position {position}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
-  const [text, setText] = useState("Once upon a time, Alice followed a white rabbit.");
+  const [text, setText] = useState("^Mr and Mrs Dursley, of number four, Privet Drive, were proud to say that they were perfectly normal, thank you very much. They were the last people you'd expect to be involved in anything strange or mysterious, because they just didn't hold with such nonsense. Mr Dursley was the director of a firm called Grunnings, which made drills. He was a big, beefy man with hardly any neck, although he did have a very large moustache. Mrs Dursley was thin and blonde and had nearly twice the usual amount of neck, which came in very useful as she spent so much of her time craning over garden fences, spying on the neighbours. The Dursleys had a small son called Dudley and in their opinion there was no finer boy anywhere. The Dursleys had everything they wanted, but they also had a secret, and their greatest fear was that somebody would discover it. They didn't think they could bear it if anyone found out about the Potters. Mrs Potter was Mrs Dursley's sister, but they hadn't met for several years; in fact, Mrs Dursley pretended she didn't have a sister, because her sister and her good- for-nothing husband were as unDursleyish as it was possible to be. The Dursleys shuddered to think what the neighbours would say if the Potters arrived in the street. The Dursleys knew that the Potters had a small son, too, but they had never even seen him. This boy was another good reason for keeping the Potters away; they didn't want Dudley mixing with a child like that.");
   const [topK, setTopK] = useState(10);
   const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
+  const [lockedIdx, setLockedIdx] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showValueWeighted, setShowValueWeighted] = useState(false);
   const [selectedModel, setSelectedModel] = useState<"t1" | "t2">("t1");
   const [selectedLayer, setSelectedLayer] = useState(0);
   const [selectedHead, setSelectedHead] = useState(0);
+  const [ablationResult, setAblationResult] = useState<AblationResult | null>(null);
+  const [ablationLoading, setAblationLoading] = useState(false);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
-    const idx = activeIdx != null ? activeIdx : analysis.positions.length;
+    // Use locked index if available, otherwise use active/hover index
+    const idx = lockedIdx != null ? lockedIdx : (activeIdx != null ? activeIdx : analysis.positions.length);
     const positionIndex = Math.min(Math.max(idx - 1, 0), analysis.positions.length - 1);
     return analysis.positions[positionIndex];
-  }, [analysis, activeIdx]);
+  }, [analysis, activeIdx, lockedIdx]);
+
+  const handleTokenClick = (idx: number) => {
+    // Toggle lock: if clicking the same token, unlock; otherwise lock to new token
+    if (lockedIdx === idx) {
+      setLockedIdx(null);
+    } else {
+      setLockedIdx(idx);
+      setActiveIdx(idx);
+    }
+  };
 
   const handleSubmit = async (evt: React.FormEvent) => {
     evt.preventDefault();
@@ -366,11 +543,47 @@ function App() {
     }
   };
 
+  const handleAblateHead = async () => {
+    // Use the active position from the analysis, not the hover state
+    const position = activePosition?.t;
+    if (!text.trim() || position === undefined) {
+      setError("Please analyze text first.");
+      return;
+    }
+    setAblationLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/ablate-head", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          position,
+          model_name: selectedModel,
+          layer: selectedLayer,
+          head: selectedHead,
+          top_k: topK,
+        }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `server responded ${res.status}`);
+      }
+      const payload = (await res.json()) as AblationResult;
+      setAblationResult(payload);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+    } finally {
+      setAblationLoading(false);
+    }
+  };
+
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <h1 style={{ marginBottom: 16 }}>Induction Heads 🎉</h1>
       <div style={{ display: "flex", flexDirection: "row", gap: 24, alignItems: "start" }}>
-        <pre>{JSON.stringify(analysis, null, 2)}</pre>
+        {/* <pre>{JSON.stringify(analysis, null, 2)}</pre> */}
         <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 24 }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <span style={{ fontWeight: 600 }}>Text</span>
@@ -435,18 +648,38 @@ function App() {
             onLayerChange={setSelectedLayer}
             onHeadChange={setSelectedHead}
           />
+
+          <AblateHeadButton
+            onClick={handleAblateHead}
+            loading={ablationLoading}
+            disabled={!activePosition}
+            position={activePosition?.t}
+            model={selectedModel}
+            layer={selectedLayer}
+            head={selectedHead}
+          />
+
+          {ablationResult && (
+            <AblationPanel
+              ablation={ablationResult}
+              onClose={() => setAblationResult(null)}
+            />
+          )}
+
           <div style={{ border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, padding: 16 }}>
-            <TokenStrip 
-              tokens={analysis.tokens} 
-              active={activeIdx} 
+            <TokenStrip
+              tokens={analysis.tokens}
+              active={lockedIdx != null ? lockedIdx : activeIdx}
               onHover={setActiveIdx}
+              onClick={handleTokenClick}
+              locked={lockedIdx}
               attentionData={activePosition?.attn || null}
               selectedModel={selectedModel}
               selectedLayer={selectedLayer}
               selectedHead={selectedHead}
             />
             <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
-              hover a token (after the first) to inspect predictions. 
+              Hover a token (after the first) to inspect predictions. Click to lock selection.
               {" Red background shows attention from the active position."}
             </div>
           </div>
