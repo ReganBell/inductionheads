@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Heatmap } from "./Heatmap";
+import { API_URL } from "./config";
 
 type ModelKey = "bigram" | "t1" | "t2";
 
@@ -976,7 +977,7 @@ function App() {
     setAnalysis(null);
     setActiveIdx(null);
     try {
-      const res = await fetch("/api/analyze", {
+      const res = await fetch(`${API_URL}/api/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, top_k: topK, compute_ablations: computeAblations }),
@@ -1006,7 +1007,7 @@ function App() {
     setAblationLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/ablate-head", {
+      const res = await fetch(`${API_URL}/api/ablate-head`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1040,7 +1041,7 @@ function App() {
     setCompositionLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/composition-scores?model_name=${selectedModel}`);
+      const res = await fetch(`${API_URL}/api/composition-scores?model_name=${selectedModel}`);
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
         throw new Error(detail?.detail || `server responded ${res.status}`);
@@ -1058,7 +1059,10 @@ function App() {
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <h1 style={{ margin: 0 }}>Induction Heads 🎉</h1>
+        <div>
+          <h1 style={{ margin: 0, marginBottom: 4 }}>Induction Heads 🎉</h1>
+          <div style={{ fontSize: 14, opacity: 0.7, fontStyle: "italic" }}>Try your own text!</div>
+        </div>
         <button
           onClick={() => setShowTextEditor(!showTextEditor)}
           style={{
