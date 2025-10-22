@@ -1058,25 +1058,25 @@ function App() {
 
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <div>
-          <h1 style={{ margin: 0, marginBottom: 4 }}>Induction Heads 🎉</h1>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ margin: 0, marginBottom: 4 }}>Induction Heads 🎉</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ fontSize: 14, opacity: 0.7, fontStyle: "italic" }}>Try your own text!</div>
+          <button
+            onClick={() => setShowTextEditor(!showTextEditor)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 6,
+              border: "1px solid rgba(0,0,0,.2)",
+              background: showTextEditor ? "rgba(0,0,0,.05)" : "white",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 500,
+            }}
+          >
+            {showTextEditor ? "Hide Editor" : "Edit Text"}
+          </button>
         </div>
-        <button
-          onClick={() => setShowTextEditor(!showTextEditor)}
-          style={{
-            padding: "8px 14px",
-            borderRadius: 6,
-            border: "1px solid rgba(0,0,0,.2)",
-            background: showTextEditor ? "rgba(0,0,0,.05)" : "white",
-            cursor: "pointer",
-            fontSize: 14,
-            fontWeight: 500,
-          }}
-        >
-          {showTextEditor ? "Hide Editor" : "Edit Text"}
-        </button>
       </div>
 
       {showTextEditor && (
