@@ -573,10 +573,15 @@ function AttentionHeadSelector({
     return { x, y };
   };
 
-  // Get K-composition score between two heads (for drawing connections)
-  const getCompositionScore = (l1Head: number, l0Head: number): number => {
+  // Get composition scores between two heads
+  const getKCompositionScore = (l1Head: number, l0Head: number): number => {
     if (!compositionScores || selectedModel === "t1") return 0;
     return compositionScores.k_composition[l1Head]?.[l0Head] || 0;
+  };
+
+  const getQCompositionScore = (l1Head: number, l0Head: number): number => {
+    if (!compositionScores || selectedModel === "t1") return 0;
+    return compositionScores.q_composition[l1Head]?.[l0Head] || 0;
   };
 
   return (
@@ -607,31 +612,70 @@ function AttentionHeadSelector({
       <div style={{ position: "relative", width: "100%", height: selectedModel === "t2" ? 260 : 140, background: "#FCFCFC", border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, overflow: "hidden" }}>
         <svg style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }}>
           {/* Draw composition connections for 2-layer model */}
-          {selectedModel === "t2" && compositionScores && Array.from({ length: heads }, (_, l1Head) =>
-            Array.from({ length: heads }, (_, l0Head) => {
-              const score = getCompositionScore(l1Head, l0Head);
-              if (score <= 0) return null; // Only draw positive composition
+          {selectedModel === "t2" && compositionScores && (
+            <>
+              {/* K-Composition (green) - strongest signal */}
+              {Array.from({ length: heads }, (_, l1Head) =>
+                Array.from({ length: heads }, (_, l0Head) => {
+                  const score = getKCompositionScore(l1Head, l0Head);
+                  if (score <= 0.001) return null; // Only draw significant positive composition
 
-              const l0Pos = getHeadPosition(0, l0Head);
-              const l1Pos = getHeadPosition(1, l1Head);
+                  const l0Pos = getHeadPosition(0, l0Head);
+                  const l1Pos = getHeadPosition(1, l1Head);
 
-              const opacity = Math.min(score * 20, 0.8); // Scale opacity by score
-              const strokeWidth = Math.max(1, score * 50); // Scale width by score
+                  // Exponential scaling to emphasize strong connections
+                  const normalizedScore = Math.max(0, score / 0.05); // Normalize assuming max ~0.05
+                  const intensity = Math.pow(normalizedScore, 2); // Exponential emphasis
+                  const opacity = Math.min(intensity * 0.9, 0.9);
+                  const strokeWidth = Math.max(1, intensity * 8);
 
-              return (
-                <line
-                  key={`conn-${l1Head}-${l0Head}`}
-                  x1={l0Pos.x}
-                  y1={l0Pos.y + headRadius}
-                  x2={l1Pos.x}
-                  y2={l1Pos.y - headRadius}
-                  stroke="#2ECF8B"
-                  strokeWidth={strokeWidth}
-                  opacity={opacity}
-                  strokeLinecap="round"
-                />
-              );
-            })
+                  return (
+                    <line
+                      key={`k-conn-${l1Head}-${l0Head}`}
+                      x1={l0Pos.x}
+                      y1={l0Pos.y + headRadius}
+                      x2={l1Pos.x}
+                      y2={l1Pos.y - headRadius}
+                      stroke="#2ECF8B"
+                      strokeWidth={strokeWidth}
+                      opacity={opacity}
+                      strokeLinecap="round"
+                    />
+                  );
+                })
+              )}
+
+              {/* Q-Composition (blue) - weaker signal */}
+              {Array.from({ length: heads }, (_, l1Head) =>
+                Array.from({ length: heads }, (_, l0Head) => {
+                  const score = getQCompositionScore(l1Head, l0Head);
+                  if (score <= 0.001) return null; // Only draw significant positive composition
+
+                  const l0Pos = getHeadPosition(0, l0Head);
+                  const l1Pos = getHeadPosition(1, l1Head);
+
+                  // Exponential scaling
+                  const normalizedScore = Math.max(0, score / 0.05);
+                  const intensity = Math.pow(normalizedScore, 2);
+                  const opacity = Math.min(intensity * 0.7, 0.7);
+                  const strokeWidth = Math.max(0.5, intensity * 6);
+
+                  return (
+                    <line
+                      key={`q-conn-${l1Head}-${l0Head}`}
+                      x1={l0Pos.x}
+                      y1={l0Pos.y + headRadius}
+                      x2={l1Pos.x}
+                      y2={l1Pos.y - headRadius}
+                      stroke="#0066ff"
+                      strokeWidth={strokeWidth}
+                      opacity={opacity}
+                      strokeLinecap="round"
+                    />
+                  );
+                })
+              )}
+            </>
           )}
         </svg>
 
@@ -693,7 +737,7 @@ function AttentionHeadSelector({
 
       <div style={{ fontSize: 12, opacity: 0.7 }}>
         Selected: {selectedModel.toUpperCase()} L{selectedLayer}H{selectedHead}
-        {selectedModel === "t2" && compositionScores && " • Green lines show K-composition strength"}
+        {selectedModel === "t2" && compositionScores && " • Green = K-composition, Blue = Q-composition"}
       </div>
     </div>
   );
