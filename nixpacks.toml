@@ -1,9 +1,5 @@
 providers = ["python"]  # only use the Python provider
 
-[phases.install]
-# Just tell it where your requirements live (monorepo friendly).
-cmds = ["pip install -r backend/requirements.txt"]
-
 [phases.build]
 # Do nothing here (prevents the extra pip call).
 cmds = ["true"]
