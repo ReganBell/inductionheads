@@ -548,6 +548,8 @@ function AttentionHeadSelector({
   onLayerChange,
   onHeadChange,
   compositionScores,
+  showComposition,
+  onToggleComposition,
 }: {
   analysis: AnalysisResponse;
   selectedModel: "t1" | "t2";
@@ -557,6 +559,8 @@ function AttentionHeadSelector({
   onLayerChange: (layer: number) => void;
   onHeadChange: (head: number) => void;
   compositionScores: CompositionScores | null;
+  showComposition: boolean;
+  onToggleComposition: (show: boolean) => void;
 }) {
   const layers = selectedModel === "t1" ? analysis.t1_layers : analysis.t2_layers;
   const heads = selectedModel === "t1" ? analysis.t1_heads : analysis.t2_heads;
@@ -589,7 +593,7 @@ function AttentionHeadSelector({
       <div style={{ fontWeight: 600, fontSize: 14 }}>Model Architecture</div>
 
       {/* Model Selection */}
-      <div style={{ display: "flex", gap: 12 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           <input
             type="radio"
@@ -606,13 +610,23 @@ function AttentionHeadSelector({
           />
           <span style={{ fontWeight: 500 }}>2-Layer Attention Only</span>
         </label>
+        {selectedModel === "t2" && (
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginLeft: 12, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={showComposition}
+              onChange={(e) => onToggleComposition(e.target.checked)}
+            />
+            <span>Show Head Composition</span>
+          </label>
+        )}
       </div>
 
       {/* Visual Architecture */}
       <div style={{ position: "relative", width: "100%", height: selectedModel === "t2" ? 260 : 140, background: "#FCFCFC", border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, overflow: "hidden" }}>
         <svg style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }}>
           {/* Draw composition connections for 2-layer model */}
-          {selectedModel === "t2" && compositionScores && (
+          {selectedModel === "t2" && showComposition && compositionScores && (
             <>
               {/* K-Composition (green) - strongest signal */}
               {Array.from({ length: heads }, (_, l1Head) =>
@@ -737,7 +751,7 @@ function AttentionHeadSelector({
 
       <div style={{ fontSize: 12, opacity: 0.7 }}>
         Selected: {selectedModel.toUpperCase()} L{selectedLayer}H{selectedHead}
-        {selectedModel === "t2" && compositionScores && " • Green = K-composition, Blue = Q-composition"}
+        {selectedModel === "t2" && showComposition && compositionScores && " • Green = K-composition, Blue = Q-composition"}
       </div>
     </div>
   );
@@ -917,6 +931,7 @@ function App() {
   const [compositionScores, setCompositionScores] = useState<CompositionScores | null>(null);
   const [compositionLoading, setCompositionLoading] = useState(false);
   const [showTextEditor, setShowTextEditor] = useState(false);
+  const [showComposition, setShowComposition] = useState(true);
 
   // Auto-load on mount
   React.useEffect(() => {
@@ -925,12 +940,12 @@ function App() {
     }
   }, []);
 
-  // Auto-load composition scores when switching to T2
+  // Auto-load composition scores when switching to T2 or when toggle is turned on
   React.useEffect(() => {
-    if (selectedModel === "t2" && !compositionScores && !compositionLoading) {
+    if (selectedModel === "t2" && showComposition && !compositionScores && !compositionLoading) {
       handleLoadCompositionScores();
     }
-  }, [selectedModel]);
+  }, [selectedModel, showComposition]);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -1126,48 +1141,24 @@ function App() {
             onLayerChange={setSelectedLayer}
             onHeadChange={setSelectedHead}
             compositionScores={compositionScores}
+            showComposition={showComposition}
+            onToggleComposition={setShowComposition}
           />
 
-          <div style={{ display: "flex", gap: 12 }}>
-            <AblateHeadButton
-              onClick={handleAblateHead}
-              loading={ablationLoading}
-              disabled={!activePosition}
-              position={activePosition?.t}
-              model={selectedModel}
-              layer={selectedLayer}
-              head={selectedHead}
-            />
-
-            <button
-              onClick={handleLoadCompositionScores}
-              disabled={compositionLoading || selectedModel === "t1"}
-              style={{
-                padding: "10px 16px",
-                borderRadius: 6,
-                border: "1px solid #0066ff",
-                background: compositionLoading || selectedModel === "t1" ? "rgba(0,0,0,.1)" : "#0066ff",
-                color: compositionLoading || selectedModel === "t1" ? "rgba(0,0,0,.4)" : "white",
-                fontWeight: 600,
-                cursor: compositionLoading || selectedModel === "t1" ? "not-allowed" : "pointer",
-                fontSize: 14,
-              }}
-            >
-              {compositionLoading ? "Loading..." : "Show Head Composition"}
-            </button>
-          </div>
+          <AblateHeadButton
+            onClick={handleAblateHead}
+            loading={ablationLoading}
+            disabled={!activePosition}
+            position={activePosition?.t}
+            model={selectedModel}
+            layer={selectedLayer}
+            head={selectedHead}
+          />
 
           {ablationResult && (
             <AblationPanel
               ablation={ablationResult}
               onClose={() => setAblationResult(null)}
-            />
-          )}
-
-          {compositionScores && (
-            <CompositionScoresPanel
-              compositionScores={compositionScores}
-              onClose={() => setCompositionScores(null)}
             />
           )}
 
