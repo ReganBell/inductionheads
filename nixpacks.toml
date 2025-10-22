@@ -1,8 +1,0 @@
-providers = ["python"]  # only use the Python provider
-
-[phases.build]
-# Do nothing here (prevents the extra pip call).
-cmds = ["true"]
-
-[start]
-cmd = "cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT"
