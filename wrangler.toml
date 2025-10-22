@@ -1,5 +1,6 @@
 name = "inductionviz"
 compatibility_date = "2024-01-01"
+pages_build_output_dir = "frontend/dist"
 
-[site]
-bucket = "./frontend/dist"
+[build]
+command = "cd frontend && npm install && npm run build"

@@ -16,11 +16,16 @@
    # Login
    railway login
 
-   # In the backend directory
-   cd backend
+   # From the root directory
    railway init
+
+   # Set start directory to backend
    railway up
    ```
+
+   In Railway dashboard:
+   - Set **Start Command**: `cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT`
+   - Or set **Root Directory**: `backend`
 
 3. **Configure Domain**
    - In Railway dashboard, go to your service settings
