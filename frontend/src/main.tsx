@@ -562,14 +562,14 @@ function AttentionHeadSelector({
   const heads = selectedModel === "t1" ? analysis.t1_heads : analysis.t2_heads;
 
   const headRadius = 24;
-  const layerSpacing = 200;
+  const layerSpacing = 120;
   const headSpacing = 60;
 
-  // Calculate positions for heads
+  // Calculate positions for heads (vertical layout: Layer 0 top, Layer 1 bottom)
   const getHeadPosition = (layer: number, head: number) => {
-    const x = layer * layerSpacing + 60;
-    const totalHeight = (heads - 1) * headSpacing;
-    const y = head * headSpacing - totalHeight / 2 + 150;
+    const totalWidth = (heads - 1) * headSpacing;
+    const x = head * headSpacing - totalWidth / 2 + 240;
+    const y = layer * layerSpacing + 60;
     return { x, y };
   };
 
@@ -604,7 +604,7 @@ function AttentionHeadSelector({
       </div>
 
       {/* Visual Architecture */}
-      <div style={{ position: "relative", width: "100%", height: 340, background: "#FCFCFC", border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ position: "relative", width: "100%", height: selectedModel === "t2" ? 260 : 140, background: "#FCFCFC", border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, overflow: "hidden" }}>
         <svg style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }}>
           {/* Draw composition connections for 2-layer model */}
           {selectedModel === "t2" && compositionScores && Array.from({ length: heads }, (_, l1Head) =>
@@ -621,10 +621,10 @@ function AttentionHeadSelector({
               return (
                 <line
                   key={`conn-${l1Head}-${l0Head}`}
-                  x1={l0Pos.x + headRadius}
-                  y1={l0Pos.y}
-                  x2={l1Pos.x - headRadius}
-                  y2={l1Pos.y}
+                  x1={l0Pos.x}
+                  y1={l0Pos.y + headRadius}
+                  x2={l1Pos.x}
+                  y2={l1Pos.y - headRadius}
                   stroke="#2ECF8B"
                   strokeWidth={strokeWidth}
                   opacity={opacity}
@@ -641,8 +641,8 @@ function AttentionHeadSelector({
             {/* Layer label */}
             <div style={{
               position: "absolute",
-              left: layer * layerSpacing + 60 - 30,
-              top: 20,
+              left: 20,
+              top: layer * layerSpacing + 60 - 10,
               fontSize: 13,
               fontWeight: 600,
               opacity: 0.7,
