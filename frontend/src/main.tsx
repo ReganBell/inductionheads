@@ -1204,7 +1204,6 @@ function App() {
                   }}
                 />
               )}
-              <TopkPanel position={activePosition} />
             </>
           ) : (
             <div style={{ opacity: 0.7 }}>hover a token to see logits & attention</div>
@@ -1239,6 +1238,8 @@ function App() {
               onClose={() => setAblationResult(null)}
             />
           )}
+
+          {activePosition && <TopkPanel position={activePosition} />}
 
           <div style={{ opacity: 0.7, fontSize: 14 }}>
             device: {analysis.device}
