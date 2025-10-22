@@ -93,6 +93,103 @@ def logits_zero_attn_path(model: HookedTransformer, tokens: torch.Tensor) -> tor
     return logits
 
 
+@torch.no_grad()
+def calculate_composition_scores(model: HookedTransformer, subtract_baseline: bool = True) -> Dict[str, List[List[float]]]:
+    """
+    Calculate Q-, K-, and V-composition scores between attention heads.
+
+    For a 2-layer model, this measures how much layer 1 heads compose with layer 0 heads.
+
+    Q-Composition: ||W_QK_h2^T @ W_OV_h1||_F / (||W_QK_h2^T||_F * ||W_OV_h1||_F)
+    K-Composition: ||W_QK_h2 @ W_OV_h1||_F / (||W_QK_h2||_F * ||W_OV_h1||_F)
+    V-Composition: ||W_OV_h2 @ W_OV_h1||_F / (||W_OV_h2||_F * ||W_OV_h1||_F)
+
+    Where:
+    - W_QK = W_Q @ W_K^T (query-key circuit)
+    - W_OV = W_V @ W_O (value-output circuit)
+
+    By default, subtracts empirical baseline from random matrices (0.0442 for d_model=512).
+    This helps identify significant composition patterns above chance.
+    """
+    if model.cfg.n_layers < 2:
+        # Need at least 2 layers for composition
+        return {"q_composition": [], "k_composition": [], "v_composition": []}
+
+    n_heads = model.cfg.n_heads
+
+    # Only compute composition from layer 0 -> layer 1
+    layer0 = 0
+    layer1 = 1
+
+    # Get weight matrices for layer 0
+    # W_Q, W_K, W_V: [n_heads, d_model, d_head]
+    # W_O: [n_heads, d_head, d_model]
+    W_Q_0 = model.W_Q[layer0]  # [n_heads, d_model, d_head]
+    W_K_0 = model.W_K[layer0]  # [n_heads, d_model, d_head]
+    W_V_0 = model.W_V[layer0]  # [n_heads, d_model, d_head]
+    W_O_0 = model.W_O[layer0]  # [n_heads, d_head, d_model]
+
+    # Get weight matrices for layer 1
+    W_Q_1 = model.W_Q[layer1]
+    W_K_1 = model.W_K[layer1]
+    W_V_1 = model.W_V[layer1]
+    W_O_1 = model.W_O[layer1]
+
+    # Compute W_OV and W_QK for each head
+    # W_OV = W_V @ W_O for each head
+    W_OV_0 = torch.einsum('hdi,hio->hdo', W_V_0, W_O_0)  # [n_heads, d_model, d_model]
+    W_OV_1 = torch.einsum('hdi,hio->hdo', W_V_1, W_O_1)  # [n_heads, d_model, d_model]
+
+    # W_QK = W_Q @ W_K^T for each head
+    W_QK_0 = torch.einsum('hqi,hki->hqk', W_Q_0, W_K_0)  # [n_heads, d_model, d_model]
+    W_QK_1 = torch.einsum('hqi,hki->hqk', W_Q_1, W_K_1)  # [n_heads, d_model, d_model]
+
+    # Initialize score matrices: [layer1_head, layer0_head]
+    q_scores = torch.zeros(n_heads, n_heads)
+    k_scores = torch.zeros(n_heads, n_heads)
+    v_scores = torch.zeros(n_heads, n_heads)
+
+    for h2 in range(n_heads):  # layer 1 heads
+        for h1 in range(n_heads):  # layer 0 heads
+            # Q-Composition: W_QK_h2^T @ W_OV_h1
+            q_product = W_QK_1[h2].T @ W_OV_0[h1]  # [d_model, d_model]
+            q_norm_product = torch.norm(q_product, p='fro')
+            q_norm_qk = torch.norm(W_QK_1[h2].T, p='fro')
+            q_norm_ov = torch.norm(W_OV_0[h1], p='fro')
+            q_scores[h2, h1] = q_norm_product / (q_norm_qk * q_norm_ov + 1e-8)
+
+            # K-Composition: W_QK_h2 @ W_OV_h1
+            k_product = W_QK_1[h2] @ W_OV_0[h1]  # [d_model, d_model]
+            k_norm_product = torch.norm(k_product, p='fro')
+            k_norm_qk = torch.norm(W_QK_1[h2], p='fro')
+            k_norm_ov = torch.norm(W_OV_0[h1], p='fro')
+            k_scores[h2, h1] = k_norm_product / (k_norm_qk * k_norm_ov + 1e-8)
+
+            # V-Composition: W_OV_h2 @ W_OV_h1
+            v_product = W_OV_1[h2] @ W_OV_0[h1]  # [d_model, d_model]
+            v_norm_product = torch.norm(v_product, p='fro')
+            v_norm_ov2 = torch.norm(W_OV_1[h2], p='fro')
+            v_norm_ov1 = torch.norm(W_OV_0[h1], p='fro')
+            v_scores[h2, h1] = v_norm_product / (v_norm_ov2 * v_norm_ov1 + 1e-8)
+
+    # Subtract empirical baseline for random matrices
+    # This baseline was computed empirically for d_model=512 matrices
+    # E[||A @ B||_F / (||A||_F * ||B||_F)] ≈ 0.0442 for random Gaussian matrices
+    if subtract_baseline:
+        baseline = 0.0442
+        q_scores = q_scores - baseline
+        k_scores = k_scores - baseline
+        v_scores = v_scores - baseline
+
+    # Convert to lists for JSON serialization
+    # Each matrix is [layer1_head, layer0_head]
+    return {
+        "q_composition": q_scores.cpu().tolist(),
+        "k_composition": k_scores.cpu().tolist(),
+        "v_composition": v_scores.cpu().tolist(),
+    }
+
+
 def _resolve_top_k(top_k: int, vocab_size: int) -> int:
     if top_k <= 0 or top_k > vocab_size:
         return vocab_size
@@ -579,6 +676,31 @@ def ablate_head(req: AblateHeadReq):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+class CompositionScoresResp(BaseModel):
+    q_composition: List[List[float]]
+    k_composition: List[List[float]]
+    v_composition: List[List[float]]
+
+
+@app.get("/api/composition-scores")
+def get_composition_scores(model_name: str = "t2"):
+    """
+    Get Q-, K-, and V-composition scores for a model.
+    Only works for multi-layer models (t2).
+    Returns matrices of shape [layer1_head, layer0_head].
+    """
+    if model_name not in MODELS:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model_name}")
+
+    model = MODELS[model_name]
+
+    if model.cfg.n_layers < 2:
+        raise HTTPException(status_code=400, detail=f"Model {model_name} has only {model.cfg.n_layers} layer(s). Need at least 2 for composition analysis.")
+
+    scores = calculate_composition_scores(model)
+    return CompositionScoresResp(**scores)
 
 
 if __name__ == "__main__":

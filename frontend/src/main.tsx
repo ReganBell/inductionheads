@@ -55,6 +55,12 @@ type AblationResult = {
   delta_negative: TopItem[];
 };
 
+type CompositionScores = {
+  q_composition: number[][];
+  k_composition: number[][];
+  v_composition: number[][];
+};
+
 function TokenStrip({
   tokens,
   active,
@@ -643,6 +649,117 @@ function AttentionHeadSelector({
   );
 }
 
+function CompositionScoresPanel({
+  compositionScores,
+  onClose,
+}: {
+  compositionScores: CompositionScores;
+  onClose: () => void;
+}) {
+  const { q_composition, k_composition, v_composition } = compositionScores;
+
+  const renderHeatmap = (data: number[][], title: string, description: string) => {
+    if (!data || data.length === 0 || data[0].length === 0) return null;
+
+    const nHeads = data.length;
+    const maxVal = Math.max(...data.flat().map(Math.abs));
+
+    return (
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 11, opacity: 0.6, marginBottom: 10 }}>{description}</div>
+        <div style={{ display: "inline-grid", gridTemplateColumns: `40px repeat(${nHeads}, 40px)`, gap: 2 }}>
+          {/* Header row - layer 0 heads */}
+          <div></div>
+          {Array.from({ length: nHeads }, (_, i) => (
+            <div key={i} style={{ fontSize: 10, textAlign: "center", opacity: 0.6 }}>
+              L0H{i}
+            </div>
+          ))}
+
+          {/* Rows for each layer 1 head */}
+          {data.map((row, l1Head) => (
+            <React.Fragment key={l1Head}>
+              <div style={{ fontSize: 10, display: "flex", alignItems: "center", opacity: 0.6 }}>
+                L1H{l1Head}
+              </div>
+              {row.map((value, l0Head) => {
+                const intensity = maxVal > 0 ? Math.abs(value) / maxVal : 0;
+                const color = value >= 0
+                  ? `rgba(46, 207, 139, ${intensity})`  // Green for positive
+                  : `rgba(255, 68, 68, ${intensity})`;   // Red for negative
+
+                return (
+                  <div
+                    key={l0Head}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      background: color,
+                      border: "1px solid rgba(0,0,0,.1)",
+                      borderRadius: 4,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 9,
+                      fontFamily: "monospace",
+                    }}
+                    title={`L1H${l1Head} ← L0H${l0Head}: ${value.toFixed(3)}`}
+                  >
+                    {value.toFixed(2)}
+                  </div>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      border: "2px solid #0066ff",
+      borderRadius: 10,
+      padding: 20,
+      background: "#FCFCFC",
+      position: "relative",
+    }}>
+      <button
+        onClick={onClose}
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 12,
+          background: "rgba(0,0,0,.05)",
+          border: "1px solid rgba(0,0,0,.1)",
+          borderRadius: 4,
+          padding: "4px 8px",
+          cursor: "pointer",
+          fontSize: 12,
+        }}
+      >
+        Close
+      </button>
+
+      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>
+        Head Composition Scores (Layer 1 ← Layer 0)
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 16 }}>
+        Shows how much information flows between attention heads through Q-, K-, and V-composition pathways.
+        Higher values = stronger composition. Computed from model weights (input-independent).
+      </div>
+
+      <div style={{ display: "grid", gap: 24 }}>
+        {renderHeatmap(k_composition, "K-Composition", "How much does L1 key vector read from L0 output?")}
+        {renderHeatmap(q_composition, "Q-Composition", "How much does L1 query vector read from L0 output?")}
+        {renderHeatmap(v_composition, "V-Composition", "How much does L1 value vector read from L0 output?")}
+      </div>
+    </div>
+  );
+}
+
 function AblateHeadButton({
   onClick,
   loading,
@@ -703,6 +820,8 @@ function App() {
   const [ablationLoading, setAblationLoading] = useState(false);
   const [highlightMode, setHighlightMode] = useState<"attention" | "value-weighted" | "delta">("attention");
   const [computeAblations, setComputeAblations] = useState(false);
+  const [compositionScores, setCompositionScores] = useState<CompositionScores | null>(null);
+  const [compositionLoading, setCompositionLoading] = useState(false);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -789,6 +908,29 @@ function App() {
     }
   };
 
+  const handleLoadCompositionScores = async () => {
+    if (selectedModel === "t1") {
+      setError("Composition scores require a 2-layer model. Please select T2.");
+      return;
+    }
+    setCompositionLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/composition-scores?model_name=${selectedModel}`);
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail?.detail || `server responded ${res.status}`);
+      }
+      const payload = (await res.json()) as CompositionScores;
+      setCompositionScores(payload);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+    } finally {
+      setCompositionLoading(false);
+    }
+  };
+
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <h1 style={{ marginBottom: 16 }}>Induction Heads 🎉</h1>
@@ -859,20 +1001,46 @@ function App() {
             onHeadChange={setSelectedHead}
           />
 
-          <AblateHeadButton
-            onClick={handleAblateHead}
-            loading={ablationLoading}
-            disabled={!activePosition}
-            position={activePosition?.t}
-            model={selectedModel}
-            layer={selectedLayer}
-            head={selectedHead}
-          />
+          <div style={{ display: "flex", gap: 12 }}>
+            <AblateHeadButton
+              onClick={handleAblateHead}
+              loading={ablationLoading}
+              disabled={!activePosition}
+              position={activePosition?.t}
+              model={selectedModel}
+              layer={selectedLayer}
+              head={selectedHead}
+            />
+
+            <button
+              onClick={handleLoadCompositionScores}
+              disabled={compositionLoading || selectedModel === "t1"}
+              style={{
+                padding: "10px 16px",
+                borderRadius: 6,
+                border: "1px solid #0066ff",
+                background: compositionLoading || selectedModel === "t1" ? "rgba(0,0,0,.1)" : "#0066ff",
+                color: compositionLoading || selectedModel === "t1" ? "rgba(0,0,0,.4)" : "white",
+                fontWeight: 600,
+                cursor: compositionLoading || selectedModel === "t1" ? "not-allowed" : "pointer",
+                fontSize: 14,
+              }}
+            >
+              {compositionLoading ? "Loading..." : "Show Head Composition"}
+            </button>
+          </div>
 
           {ablationResult && (
             <AblationPanel
               ablation={ablationResult}
               onClose={() => setAblationResult(null)}
+            />
+          )}
+
+          {compositionScores && (
+            <CompositionScoresPanel
+              compositionScores={compositionScores}
+              onClose={() => setCompositionScores(null)}
             />
           )}
 
