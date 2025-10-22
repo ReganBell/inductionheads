@@ -926,7 +926,7 @@ function App() {
   const [selectedHead, setSelectedHead] = useState(0);
   const [ablationResult, setAblationResult] = useState<AblationResult | null>(null);
   const [ablationLoading, setAblationLoading] = useState(false);
-  const [highlightMode, setHighlightMode] = useState<"attention" | "value-weighted" | "delta">("attention");
+  const [highlightMode, setHighlightMode] = useState<"attention" | "value-weighted" | "delta">("value-weighted");
   const [computeAblations, setComputeAblations] = useState(false);
   const [compositionScores, setCompositionScores] = useState<CompositionScores | null>(null);
   const [compositionLoading, setCompositionLoading] = useState(false);
