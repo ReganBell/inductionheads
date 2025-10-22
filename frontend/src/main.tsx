@@ -547,6 +547,7 @@ function AttentionHeadSelector({
   onModelChange,
   onLayerChange,
   onHeadChange,
+  compositionScores,
 }: {
   analysis: AnalysisResponse;
   selectedModel: "t1" | "t2";
@@ -555,84 +556,144 @@ function AttentionHeadSelector({
   onModelChange: (model: "t1" | "t2") => void;
   onLayerChange: (layer: number) => void;
   onHeadChange: (head: number) => void;
+  compositionScores: CompositionScores | null;
 }) {
   const layers = selectedModel === "t1" ? analysis.t1_layers : analysis.t2_layers;
   const heads = selectedModel === "t1" ? analysis.t1_heads : analysis.t2_heads;
 
-  console.log('layers', layers);
-  console.log('heads', heads);
-  console.log('selectedModel', selectedModel);
-  console.log('selectedLayer', selectedLayer);
-  console.log('selectedHead', selectedHead);
+  const headRadius = 24;
+  const layerSpacing = 200;
+  const headSpacing = 60;
+
+  // Calculate positions for heads
+  const getHeadPosition = (layer: number, head: number) => {
+    const x = layer * layerSpacing + 60;
+    const totalHeight = (heads - 1) * headSpacing;
+    const y = head * headSpacing - totalHeight / 2 + 150;
+    return { x, y };
+  };
+
+  // Get K-composition score between two heads (for drawing connections)
+  const getCompositionScore = (l1Head: number, l0Head: number): number => {
+    if (!compositionScores || selectedModel === "t1") return 0;
+    return compositionScores.k_composition[l1Head]?.[l0Head] || 0;
+  };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-      <div style={{ fontWeight: 600, fontSize: 14 }}>Attention Head Selector</div>
-      
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 14 }}>Model Architecture</div>
+
       {/* Model Selection */}
-      <div style={{ display: "flex", gap: 8 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+      <div style={{ display: "flex", gap: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           <input
             type="radio"
             checked={selectedModel === "t1"}
             onChange={() => onModelChange("t1")}
           />
-          <span>Transformer L1</span>
+          <span style={{ fontWeight: 500 }}>1-Layer Attention Only</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
           <input
             type="radio"
             checked={selectedModel === "t2"}
             onChange={() => onModelChange("t2")}
           />
-          <span>Transformer L2</span>
+          <span style={{ fontWeight: 500 }}>2-Layer Attention Only</span>
         </label>
       </div>
 
-      {/* Layer Selection */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-        <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>Layer:</span>
-        {Array.from({ length: layers }, (_, i) => (
-          <button
-            key={i}
-            onClick={() => onLayerChange(i)}
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              border: "1px solid rgba(0,0,0,.2)",
-              borderRadius: 4,
-              background: selectedLayer === i ? "rgba(0,160,255,.2)" : "white",
-              cursor: "pointer",
-            }}
-          >
-            L{i}
-          </button>
-        ))}
-      </div>
+      {/* Visual Architecture */}
+      <div style={{ position: "relative", width: "100%", height: 340, background: "#FCFCFC", border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, overflow: "hidden" }}>
+        <svg style={{ width: "100%", height: "100%", position: "absolute", top: 0, left: 0 }}>
+          {/* Draw composition connections for 2-layer model */}
+          {selectedModel === "t2" && compositionScores && Array.from({ length: heads }, (_, l1Head) =>
+            Array.from({ length: heads }, (_, l0Head) => {
+              const score = getCompositionScore(l1Head, l0Head);
+              if (score <= 0) return null; // Only draw positive composition
 
-      {/* Head Selection */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-        <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>Head:</span>
-        {Array.from({ length: heads }, (_, i) => (
-          <button
-            key={i}
-            onClick={() => onHeadChange(i)}
-            style={{
-              padding: "4px 8px",
-              fontSize: 12,
-              border: "1px solid rgba(0,0,0,.2)",
-              borderRadius: 4,
-              background: selectedHead === i ? "rgba(0,160,255,.2)" : "white",
-              cursor: "pointer",
-            }}
-          >
-            H{i}
-          </button>
+              const l0Pos = getHeadPosition(0, l0Head);
+              const l1Pos = getHeadPosition(1, l1Head);
+
+              const opacity = Math.min(score * 20, 0.8); // Scale opacity by score
+              const strokeWidth = Math.max(1, score * 50); // Scale width by score
+
+              return (
+                <line
+                  key={`conn-${l1Head}-${l0Head}`}
+                  x1={l0Pos.x + headRadius}
+                  y1={l0Pos.y}
+                  x2={l1Pos.x - headRadius}
+                  y2={l1Pos.y}
+                  stroke="#2ECF8B"
+                  strokeWidth={strokeWidth}
+                  opacity={opacity}
+                  strokeLinecap="round"
+                />
+              );
+            })
+          )}
+        </svg>
+
+        {/* Draw heads */}
+        {Array.from({ length: layers }, (_, layer) => (
+          <div key={`layer-${layer}`} style={{ position: "absolute", left: 0, top: 0 }}>
+            {/* Layer label */}
+            <div style={{
+              position: "absolute",
+              left: layer * layerSpacing + 60 - 30,
+              top: 20,
+              fontSize: 13,
+              fontWeight: 600,
+              opacity: 0.7,
+            }}>
+              Layer {layer}
+            </div>
+
+            {/* Heads for this layer */}
+            {Array.from({ length: heads }, (_, head) => {
+              const pos = getHeadPosition(layer, head);
+              const isSelected = selectedLayer === layer && selectedHead === head;
+
+              return (
+                <div
+                  key={`head-${layer}-${head}`}
+                  onClick={() => {
+                    onLayerChange(layer);
+                    onHeadChange(head);
+                  }}
+                  style={{
+                    position: "absolute",
+                    left: pos.x - headRadius,
+                    top: pos.y - headRadius,
+                    width: headRadius * 2,
+                    height: headRadius * 2,
+                    borderRadius: "50%",
+                    border: isSelected ? "3px solid #0066ff" : "2px solid rgba(0,0,0,.2)",
+                    background: isSelected ? "#0066ff" : "white",
+                    color: isSelected ? "white" : "#0E1111",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                    boxShadow: isSelected ? "0 4px 12px rgba(0,102,255,.3)" : "0 2px 4px rgba(0,0,0,.1)",
+                  }}
+                  title={`L${layer}H${head}`}
+                >
+                  {head}
+                </div>
+              );
+            })}
+          </div>
         ))}
       </div>
 
       <div style={{ fontSize: 12, opacity: 0.7 }}>
-        Selected: {selectedModel.toUpperCase()} Layer {selectedLayer} Head {selectedHead}
+        Selected: {selectedModel.toUpperCase()} L{selectedLayer}H{selectedHead}
+        {selectedModel === "t2" && compositionScores && " • Green lines show K-composition strength"}
       </div>
     </div>
   );
@@ -819,6 +880,13 @@ function App() {
       handleSubmit(new Event('submit') as any);
     }
   }, []);
+
+  // Auto-load composition scores when switching to T2
+  React.useEffect(() => {
+    if (selectedModel === "t2" && !compositionScores && !compositionLoading) {
+      handleLoadCompositionScores();
+    }
+  }, [selectedModel]);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -1013,6 +1081,7 @@ function App() {
             onModelChange={setSelectedModel}
             onLayerChange={setSelectedLayer}
             onHeadChange={setSelectedHead}
+            compositionScores={compositionScores}
           />
 
           <div style={{ display: "flex", gap: 12 }}>
