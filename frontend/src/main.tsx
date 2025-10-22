@@ -1132,36 +1132,6 @@ function App() {
 
       {analysis && (
         <div style={{ display: "grid", gap: 24 }}>
-          <AttentionHeadSelector
-            analysis={analysis}
-            selectedModel={selectedModel}
-            selectedLayer={selectedLayer}
-            selectedHead={selectedHead}
-            onModelChange={setSelectedModel}
-            onLayerChange={setSelectedLayer}
-            onHeadChange={setSelectedHead}
-            compositionScores={compositionScores}
-            showComposition={showComposition}
-            onToggleComposition={setShowComposition}
-          />
-
-          <AblateHeadButton
-            onClick={handleAblateHead}
-            loading={ablationLoading}
-            disabled={!activePosition}
-            position={activePosition?.t}
-            model={selectedModel}
-            layer={selectedLayer}
-            head={selectedHead}
-          />
-
-          {ablationResult && (
-            <AblationPanel
-              ablation={ablationResult}
-              onClose={() => setAblationResult(null)}
-            />
-          )}
-
           <div style={{ border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, padding: 16 }}>
             <TokenStrip
               tokens={analysis.tokens}
@@ -1235,23 +1205,39 @@ function App() {
                 />
               )}
               <TopkPanel position={activePosition} />
-              {/* <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-                <AttnPanel 
-                  label="Attention L1" 
-                  attn={activePosition.attn.t1} 
-                  valueWeightedAttn={activePosition.value_weighted_attn.t1}
-                  showValueWeighted={showValueWeighted}
-                />
-                <AttnPanel 
-                  label="Attention L2" 
-                  attn={activePosition.attn.t2} 
-                  valueWeightedAttn={activePosition.value_weighted_attn.t2}
-                  showValueWeighted={showValueWeighted}
-                />
-              </div> */}
             </>
           ) : (
             <div style={{ opacity: 0.7 }}>hover a token to see logits & attention</div>
+          )}
+
+          <AttentionHeadSelector
+            analysis={analysis}
+            selectedModel={selectedModel}
+            selectedLayer={selectedLayer}
+            selectedHead={selectedHead}
+            onModelChange={setSelectedModel}
+            onLayerChange={setSelectedLayer}
+            onHeadChange={setSelectedHead}
+            compositionScores={compositionScores}
+            showComposition={showComposition}
+            onToggleComposition={setShowComposition}
+          />
+
+          <AblateHeadButton
+            onClick={handleAblateHead}
+            loading={ablationLoading}
+            disabled={!activePosition}
+            position={activePosition?.t}
+            model={selectedModel}
+            layer={selectedLayer}
+            head={selectedHead}
+          />
+
+          {ablationResult && (
+            <AblationPanel
+              ablation={ablationResult}
+              onClose={() => setAblationResult(null)}
+            />
           )}
 
           <div style={{ opacity: 0.7, fontSize: 14 }}>
