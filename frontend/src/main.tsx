@@ -316,20 +316,6 @@ function AttnPanel({
   );
 }
 
-function MatchInfo({ position }: { position: PositionInfo }) {
-  if (position.match_index == null) {
-    return null;
-  }
-  const attention = position.match_attention;
-  return (
-    <div style={{ fontSize: 13, opacity: 0.75 }}>
-      repeats token from position {position.match_index}; attention sum →
-      {" "}
-      t1: {attention ? attention.t1.toFixed(3) : "0.000"}, t2: {attention ? attention.t2.toFixed(3) : "0.000"}
-    </div>
-  );
-}
-
 function HeadInfluencePanel({
   position,
   selectedModel,
@@ -498,11 +484,14 @@ function AblationPanel({
         Close
       </button>
 
-      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>
         Head Ablation Analysis
       </div>
+      <div style={{ fontSize: 13, opacity: 0.6, fontStyle: "italic", marginBottom: 16 }}>
+        Misleading, Probably Useless
+      </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
         {panels.map((panel) => {
           const data = ablation[panel.key];
           return (
@@ -822,6 +811,14 @@ function App() {
   const [computeAblations, setComputeAblations] = useState(false);
   const [compositionScores, setCompositionScores] = useState<CompositionScores | null>(null);
   const [compositionLoading, setCompositionLoading] = useState(false);
+  const [showTextEditor, setShowTextEditor] = useState(false);
+
+  // Auto-load on mount
+  React.useEffect(() => {
+    if (!analysis && !loading) {
+      handleSubmit(new Event('submit') as any);
+    }
+  }, []);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -933,10 +930,26 @@ function App() {
 
   return (
     <div style={{ fontFamily: "Inter, system-ui, sans-serif", padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <h1 style={{ marginBottom: 16 }}>Induction Heads 🎉</h1>
-      <div style={{ display: "flex", flexDirection: "row", gap: 24, alignItems: "start" }}>
-        {/* <pre>{JSON.stringify(analysis, null, 2)}</pre> */}
-        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <h1 style={{ margin: 0 }}>Induction Heads 🎉</h1>
+        <button
+          onClick={() => setShowTextEditor(!showTextEditor)}
+          style={{
+            padding: "8px 14px",
+            borderRadius: 6,
+            border: "1px solid rgba(0,0,0,.2)",
+            background: showTextEditor ? "rgba(0,0,0,.05)" : "white",
+            cursor: "pointer",
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          {showTextEditor ? "Hide Editor" : "Edit Text"}
+        </button>
+      </div>
+
+      {showTextEditor && (
+        <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12, marginBottom: 24, padding: 16, border: "1px solid rgba(0,0,0,.1)", borderRadius: 10, background: "#FCFCFC" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <span style={{ fontWeight: 600 }}>Text</span>
             <textarea
@@ -988,6 +1001,7 @@ function App() {
           </button>
           {error && <div style={{ color: "#d42" }}>{error}</div>}
         </form>
+      )}
 
       {analysis && (
         <div style={{ display: "grid", gap: 24 }}>
@@ -1104,7 +1118,6 @@ function App() {
                 <strong>Context token:</strong> {activePosition.context_token.text || "␠"}{" "}
                 → <strong>next:</strong> {activePosition.next_token.text || "␠"}
               </div>
-              <MatchInfo position={activePosition} />
               {activePosition.head_deltas && Object.keys(activePosition.head_deltas[selectedModel]).length > 0 && (
                 <HeadInfluencePanel
                   position={activePosition}
@@ -1142,7 +1155,12 @@ function App() {
           </div>
         </div>
       )}
-      </div>
+
+      {!analysis && loading && (
+        <div style={{ textAlign: "center", padding: 40, opacity: 0.7 }}>
+          Loading analysis...
+        </div>
+      )}
 
     </div>
   );
