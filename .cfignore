@@ -1,0 +1,7 @@
+backend/
+*.py
+*.txt
+nixpacks.toml
+railway.toml
+Procfile
+train_attn_only.py
