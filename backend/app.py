@@ -127,7 +127,7 @@ def _run_with_cache(model: HookedTransformer, toks: torch.Tensor):
     pattern_names = [f"blocks.{layer}.attn.hook_pattern" for layer in range(model.cfg.n_layers)]
     value_names = [f"blocks.{layer}.attn.hook_v" for layer in range(model.cfg.n_layers)]
     names = pattern_names + value_names
-    
+
     logits, cache = model.run_with_cache(
         toks,
         names_filter=lambda n: n in names,
@@ -137,45 +137,120 @@ def _run_with_cache(model: HookedTransformer, toks: torch.Tensor):
 
 
 @torch.no_grad()
+def _calculate_all_head_deltas(model: HookedTransformer, toks: torch.Tensor, position: int, next_token_id: int, context_token_ids: List[int], top_k: int = 10):
+    """
+    Calculate delta logits for ablating each head at a given position.
+    Only considers deltas for tokens that actually appear in the context.
+    Returns dict with rich information about what each head is doing.
+    """
+    # Get baseline logits at this position
+    logits_base = model(toks)[0, position]  # [vocab]
+
+    # Get unique token IDs from context (tokens the head could be attending to)
+    context_vocab = set(context_token_ids)
+
+    deltas = {}
+
+    for layer in range(model.cfg.n_layers):
+        for head in range(model.cfg.n_heads):
+            # Create hook to zero this specific head
+            # Need to use a closure to capture the current head value
+            def make_zero_head_hook(head_idx):
+                def zero_head_hook(v, hook):
+                    v[:, :, head_idx, :] = 0.0
+                    return v
+                return zero_head_hook
+
+            # Run model with head ablated
+            # Use hook_z (before W_O) not hook_result (after W_O)
+            logits_ablated = model.run_with_hooks(
+                toks,
+                fwd_hooks=[(f"blocks.{layer}.attn.hook_z", make_zero_head_hook(head))]
+            )[0, position]
+
+            # Calculate delta logits: baseline - ablated = head's contribution
+            delta_logits = logits_base - logits_ablated  # [vocab]
+
+            # Filter to only context tokens
+            context_deltas = {tid: float(delta_logits[tid]) for tid in context_vocab}
+
+            # Get magnitude (sum of absolute deltas for context tokens only)
+            magnitude = sum(abs(d) for d in context_deltas.values())
+
+            # Sort context tokens by delta
+            sorted_context = sorted(context_deltas.items(), key=lambda x: x[1], reverse=True)
+
+            # Get top promoted tokens from context
+            top_promoted = [
+                {"token": decode([int(tid)]), "id": int(tid), "delta": float(delta)}
+                for tid, delta in sorted_context[:top_k]
+                if delta > 0
+            ]
+
+            # Get top suppressed tokens from context
+            top_suppressed = [
+                {"token": decode([int(tid)]), "id": int(tid), "delta": float(delta)}
+                for tid, delta in sorted_context[-top_k:][::-1]
+                if delta < 0
+            ]
+
+            # Delta for the actual next token
+            actual_token_delta = float(delta_logits[next_token_id])
+
+            deltas[f"L{layer}H{head}"] = {
+                "magnitude": magnitude,
+                "actual_token_delta": actual_token_delta,
+                "top_promoted": top_promoted,
+                "top_suppressed": top_suppressed,
+            }
+
+    return deltas
+
+
+@torch.no_grad()
 def _calculate_value_weighted_attention(cache: Dict[str, torch.Tensor], n_layers: int, t: int) -> List[List[List[float]]]:
     """
     Calculate value-weighted attention patterns.
     For each layer and head, compute attention weights scaled by the norm of value vectors.
+
+    value_weighted(dest, src) = attention(dest, src) * ||v_src||
+
+    This shows "how much information is actually being moved" not just "where is attention paid"
     """
     value_weighted_attn = []
-    
+
     for layer in range(n_layers):
         layer_patterns = []
-        
+
         # Get attention patterns for this layer
         pattern_key = f"blocks.{layer}.attn.hook_pattern"
         value_key = f"blocks.{layer}.attn.hook_v"
-        
+
         if pattern_key not in cache or value_key not in cache:
             continue
-            
-        attn_pattern = cache[pattern_key][0, :, t-1, :t]  # [n_heads, t]
-        value_vectors = cache[value_key][0, :, :t, :]     # [n_heads, t, d_head]
-        
+
+        attn_pattern = cache[pattern_key][0, :, t, :t+1]  # [n_heads, t+1] - attention from position t to all previous
+        value_vectors = cache[value_key][0, :t+1, :, :]     # [t+1, n_heads, d_head]
+
         n_heads = attn_pattern.size(0)
-        
+
         for head in range(n_heads):
-            # Get attention weights for this head
-            attn_weights = attn_pattern[head]  # [t]
-            
-            # Get value vectors for this head
-            head_values = value_vectors[head]  # [t, d_head]
-            
+            # Get attention weights for this head from position t
+            attn_weights = attn_pattern[head]  # [t+1]
+
+            # Get value vectors for this head (source positions)
+            head_values = value_vectors[:, head, :]  # [t+1, d_head]
+
             # Calculate norms of value vectors
-            value_norms = torch.norm(head_values, dim=-1)  # [t]
-            
-            # Calculate value-weighted attention
-            value_weighted = attn_weights * value_norms  # [t]
-            
+            value_norms = torch.norm(head_values, dim=-1)  # [t+1]
+
+            # Calculate value-weighted attention: attention * ||value||
+            value_weighted = attn_weights * value_norms  # [t+1]
+
             layer_patterns.append(value_weighted.detach().cpu().tolist())
-        
+
         value_weighted_attn.append(layer_patterns)
-    
+
     return value_weighted_attn
 
 
@@ -205,7 +280,7 @@ def _topk_pack(vec: torch.Tensor, topk: int) -> List[Dict[str, float]]:
     ]
 
 
-def analyze_text(text: str, *, top_k: int = 10, models: Optional[Dict[str, HookedTransformer]] = None):
+def analyze_text(text: str, *, top_k: int = 10, compute_ablations: bool = False, models: Optional[Dict[str, HookedTransformer]] = None):
     if models is None:
         models = MODELS
     # load text from hp.txt
@@ -248,8 +323,18 @@ def analyze_text(text: str, *, top_k: int = 10, models: Optional[Dict[str, Hooke
 
 
         # Calculate value-weighted attention patterns
-        # value_weighted_attn1 = _calculate_value_weighted_attention(cache1, models["t1"].cfg.n_layers, t)
-        # value_weighted_attn2 = _calculate_value_weighted_attention(cache2, models["t2"].cfg.n_layers, t)
+        value_weighted_attn1 = _calculate_value_weighted_attention(cache1, models["t1"].cfg.n_layers, t)
+        value_weighted_attn2 = _calculate_value_weighted_attention(cache2, models["t2"].cfg.n_layers, t)
+
+        # Calculate head deltas for this position (SLOW - only if requested)
+        if compute_ablations:
+            # Pass context tokens (all tokens up to and including current position)
+            context_token_ids = ids[:t]  # tokens from 0 to t-1 (what the model can attend to)
+            head_deltas_t1 = _calculate_all_head_deltas(models["t1"], toks, t - 1, next_id, context_token_ids)
+            head_deltas_t2 = _calculate_all_head_deltas(models["t2"], toks, t - 1, next_id, context_token_ids)
+        else:
+            head_deltas_t1 = {}
+            head_deltas_t2 = {}
 
         match_index = None
         for idx in range(t - 1, -1, -1):
@@ -294,8 +379,12 @@ def analyze_text(text: str, *, top_k: int = 10, models: Optional[Dict[str, Hooke
                     "t2": attn2,
                 },
                 "value_weighted_attn": {
-                    # "t1": value_weighted_attn1,
-                    # "t2": value_weighted_attn2,
+                    "t1": value_weighted_attn1,
+                    "t2": value_weighted_attn2,
+                },
+                "head_deltas": {
+                    "t1": head_deltas_t1,
+                    "t2": head_deltas_t2,
                 },
                 "losses": {
                     "bigram": loss_bigram,
@@ -327,6 +416,7 @@ class AnalyzeReq(BaseModel):
 
     text: str
     top_k: int = 10
+    compute_ablations: bool = False
 
 
 class AnalyzeResp(BaseModel):
@@ -386,7 +476,12 @@ def ablate_head_analysis(
     model = models[model_name]
     ids = encode(text)
 
-    if position < 0 or position >= len(ids):
+    # Position here is the token index we're hovering/locked on
+    # The frontend sends us the index in the token array (which includes BOS at position 0)
+    # For the analysis positions array, position t predicts token at index t+1
+    # So we need to look at logits from position t-1 to see predictions for token at position t
+
+    if position < 1 or position >= len(ids):
         raise ValueError(f"Position {position} out of range for text with {len(ids)} tokens")
 
     if layer < 0 or layer >= model.cfg.n_layers:
@@ -397,27 +492,63 @@ def ablate_head_analysis(
 
     toks = torch.tensor(ids, device=DEVICE, dtype=torch.long).unsqueeze(0)
 
+    # We want to see how the head affects prediction of the token at 'position'
+    # So we look at logits from position-1 (which predict position)
+    logit_pos = position - 1
+
+    # Get context token IDs (tokens that the model can attend to at this position)
+    context_token_ids = ids[:position]
+    context_vocab = set(context_token_ids)
+
     # 1) Baseline logits at the position of interest
-    logits_base = model(toks)[0, position]  # [vocab]
+    logits_base = model(toks)[0, logit_pos]  # [vocab]
 
     # 2) Re-run with the chosen head zeroed
     def zero_one_head_hook(v, hook):
-        # v: [batch, seq, n_heads, d_head] *before* W_O ("result" in TLens)
+        # v: [batch, seq, n_heads, d_head] at hook_z (before W_O)
         v[:, :, head, :] = 0.0
         return v
 
     logits_no_head = model.run_with_hooks(
         toks,
-        fwd_hooks=[(f"blocks.{layer}.attn.hook_result", zero_one_head_hook)]
-    )[0, position]  # [vocab]
+        fwd_hooks=[(f"blocks.{layer}.attn.hook_z", zero_one_head_hook)]
+    )[0, logit_pos]  # [vocab]
 
     delta_logits = logits_base - logits_no_head  # the head's exact contribution to each vocab logit
 
-    # Get top-k results
+    # Filter delta_logits to only context tokens
+    context_deltas = {tid: float(delta_logits[tid]) for tid in context_vocab}
+
+    # Sort context tokens by delta
+    sorted_context_pos = sorted(context_deltas.items(), key=lambda x: x[1], reverse=True)
+    sorted_context_neg = sorted(context_deltas.items(), key=lambda x: x[1])
+
+    # Get top-k results - still show full vocab for with/without
     topk_with = _topk_pack(logits_base, top_k)
     topk_without = _topk_pack(logits_no_head, top_k)
-    topk_delta = _topk_pack(delta_logits, top_k)      # tokens most *helped* by the head
-    topk_delta_neg = _topk_pack(-delta_logits, top_k) # tokens most *hurt* by the head
+
+    # For deltas, only show context tokens
+    topk_delta = [
+        {
+            "token": decode([int(tid)]),
+            "id": int(tid),
+            "logit": float(delta),
+            "prob": 0.0,  # prob doesn't make sense for deltas
+        }
+        for tid, delta in sorted_context_pos[:top_k]
+        if delta > 0
+    ]
+
+    topk_delta_neg = [
+        {
+            "token": decode([int(tid)]),
+            "id": int(tid),
+            "logit": float(delta),
+            "prob": 0.0,  # prob doesn't make sense for deltas
+        }
+        for tid, delta in sorted_context_neg[:top_k]
+        if delta < 0
+    ]
 
     return {
         "with_head": topk_with,
@@ -430,7 +561,7 @@ def ablate_head_analysis(
 @app.post("/api/analyze", response_model=AnalyzeResp)
 def analyze(req: AnalyzeReq):
     try:
-        return analyze_text(req.text, top_k=req.top_k)
+        return analyze_text(req.text, top_k=req.top_k, compute_ablations=req.compute_ablations)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

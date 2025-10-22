@@ -16,6 +16,13 @@ type TopItem = {
   prob: number;
 };
 
+type HeadDelta = {
+  magnitude: number;
+  actual_token_delta: number;
+  top_promoted: Array<{ token: string; id: number; delta: number }>;
+  top_suppressed: Array<{ token: string; id: number; delta: number }>;
+};
+
 type PositionInfo = {
   t: number;
   context_token: TokenInfo;
@@ -23,6 +30,7 @@ type PositionInfo = {
   topk: Record<ModelKey, TopItem[] | null>;
   attn: { t1: number[][][]; t2: number[][][] };
   value_weighted_attn: { t1: number[][][]; t2: number[][][] };
+  head_deltas: { t1: Record<string, HeadDelta>; t2: Record<string, HeadDelta> };
   losses: Record<ModelKey, number | null>;
   bigram_available: boolean;
   match_index: number | null;
@@ -54,9 +62,12 @@ function TokenStrip({
   onClick,
   locked,
   attentionData,
+  valueWeightedData,
+  headDeltasData,
   selectedModel,
   selectedLayer,
   selectedHead,
+  highlightMode,
 }: {
   tokens: TokenInfo[];
   active: number | null;
@@ -64,26 +75,73 @@ function TokenStrip({
   onClick: (index: number) => void;
   locked: number | null;
   attentionData: { t1: number[][][]; t2: number[][][] } | null;
+  valueWeightedData: { t1: number[][][]; t2: number[][][] } | null;
+  headDeltasData: { t1: Record<string, HeadDelta>; t2: Record<string, HeadDelta> } | null;
   selectedModel: "t1" | "t2";
   selectedLayer: number;
   selectedHead: number;
+  highlightMode: "attention" | "value-weighted" | "delta";
 }) {
   // Calculate attention scores for each token using selected head
   const getTokenAttentionScore = (tokenIdx: number): number => {
     if (!attentionData || active === null || active <= 0) return 0;
-    
+
     const modelData = attentionData[selectedModel];
     if (!modelData || !modelData[selectedLayer] || !modelData[selectedLayer][selectedHead]) {
       return 0;
     }
-    
+
     const headAttention = modelData[selectedLayer][selectedHead];
     return headAttention[tokenIdx] || 0;
   };
 
-  // Calculate max attention for normalization
-  const maxAttention = Math.max(
-    ...tokens.map((_, idx) => getTokenAttentionScore(idx))
+  // Calculate value-weighted attention scores
+  const getTokenValueWeightedScore = (tokenIdx: number): number => {
+    if (!valueWeightedData || active === null || active <= 0) return 0;
+
+    const modelData = valueWeightedData[selectedModel];
+    if (!modelData || !modelData[selectedLayer] || !modelData[selectedLayer][selectedHead]) {
+      return 0;
+    }
+
+    const headValueWeighted = modelData[selectedLayer][selectedHead];
+    return headValueWeighted[tokenIdx] || 0;
+  };
+
+  // Calculate delta score for each token using selected head
+  const getTokenDeltaScore = (tokenIdx: number, tokenId: number): number => {
+    if (!headDeltasData || active === null || active <= 0) return 0;
+
+    const modelData = headDeltasData[selectedModel];
+    if (!modelData) return 0;
+
+    const headKey = `L${selectedLayer}H${selectedHead}`;
+    const headData = modelData[headKey];
+    if (!headData) return 0;
+
+    // Find this token in promoted or suppressed lists
+    const promoted = headData.top_promoted.find(t => t.id === tokenId);
+    if (promoted) return promoted.delta;
+
+    const suppressed = headData.top_suppressed.find(t => t.id === tokenId);
+    if (suppressed) return suppressed.delta;
+
+    return 0;
+  };
+
+  // Calculate scores based on mode
+  const getTokenScore = (tokenIdx: number, tokenId: number): number => {
+    if (highlightMode === "delta") {
+      return getTokenDeltaScore(tokenIdx, tokenId);
+    } else if (highlightMode === "value-weighted") {
+      return getTokenValueWeightedScore(tokenIdx);
+    }
+    return getTokenAttentionScore(tokenIdx);
+  };
+
+  // Calculate max score for normalization
+  const maxScore = Math.max(
+    ...tokens.map((tok, idx) => Math.abs(getTokenScore(idx, tok.id)))
   );
 
   return (
@@ -92,16 +150,37 @@ function TokenStrip({
         const disabled = idx === 0;
         const isLocked = locked === idx;
         const isActive = active === idx;
-        const attentionScore = getTokenAttentionScore(idx);
-        const normalizedAttention = maxAttention > 0 ? attentionScore / maxAttention : 0;
+        const score = getTokenScore(idx, tok.id);
+        const normalizedScore = maxScore > 0 ? Math.abs(score) / maxScore : 0;
 
-        // Create attention-based background color
-        const attentionColor = `rgba(255, 100, 100, ${normalizedAttention * 0.3})`;
+        // Create background color based on mode
+        let highlightColor: string;
+        if (highlightMode === "delta") {
+          // Green for positive delta, red for negative
+          if (score > 0) {
+            highlightColor = `rgba(46, 207, 139, ${normalizedScore * 0.4})`;
+          } else if (score < 0) {
+            highlightColor = `rgba(220, 68, 68, ${normalizedScore * 0.4})`;
+          } else {
+            highlightColor = "rgba(0,0,0,.02)";
+          }
+        } else {
+          // Red for attention
+          highlightColor = `rgba(255, 100, 100, ${normalizedScore * 0.3})`;
+        }
+
+        const tooltipText = disabled
+          ? "bos"
+          : highlightMode === "delta"
+            ? `position ${idx} (delta: ${score.toFixed(4)}) - click to lock`
+            : highlightMode === "value-weighted"
+              ? `position ${idx} (value-weighted: ${score.toFixed(3)}) - click to lock`
+              : `position ${idx} (attention: ${score.toFixed(3)}) - click to lock`;
 
         return (
           <span
             key={idx}
-            title={disabled ? "bos" : `position ${idx} (attention: ${attentionScore.toFixed(3)}) - click to lock`}
+            title={tooltipText}
             onMouseEnter={() => (disabled || locked !== null ? undefined : onHover(idx))}
             onMouseLeave={() => (disabled || locked !== null ? undefined : onHover(null))}
             onClick={() => disabled ? undefined : onClick(idx)}
@@ -113,8 +192,8 @@ function TokenStrip({
                   : "rgba(0,160,255,.2)"
                 : disabled
                   ? undefined
-                  : attentionData
-                    ? attentionColor
+                  : (attentionData || headDeltasData)
+                    ? highlightColor
                     : "rgba(0,160,255,.05)",
               cursor: disabled ? "default" : "pointer",
               borderBottom: disabled
@@ -241,6 +320,135 @@ function MatchInfo({ position }: { position: PositionInfo }) {
       repeats token from position {position.match_index}; attention sum →
       {" "}
       t1: {attention ? attention.t1.toFixed(3) : "0.000"}, t2: {attention ? attention.t2.toFixed(3) : "0.000"}
+    </div>
+  );
+}
+
+function HeadInfluencePanel({
+  position,
+  selectedModel,
+  selectedLayer,
+  selectedHead,
+  onHeadClick,
+}: {
+  position: PositionInfo;
+  selectedModel: "t1" | "t2";
+  selectedLayer: number;
+  selectedHead: number;
+  onHeadClick?: (layer: number, head: number) => void;
+}) {
+  const deltas = position.head_deltas[selectedModel];
+
+  // Convert to array and sort by magnitude
+  const sortedHeads = Object.entries(deltas)
+    .map(([headKey, headData]) => ({ headKey, ...headData }))
+    .sort((a, b) => b.magnitude - a.magnitude);
+
+  const topHeads = sortedHeads.slice(0, 8);
+
+  const selectedHeadKey = `L${selectedLayer}H${selectedHead}`;
+  const selectedHeadData = deltas[selectedHeadKey];
+
+  return (
+    <div style={{
+      border: "1px solid rgba(0,0,0,.1)",
+      borderRadius: 10,
+      padding: 16,
+      background: "#FCFCFC",
+    }}>
+      <div style={{ fontWeight: 600, marginBottom: 12, fontSize: 14 }}>
+        Head Influence Analysis ({selectedModel.toUpperCase()})
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+        {/* Left: Top heads by magnitude */}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.7 }}>
+            Most Influential Heads (by magnitude)
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {topHeads.map(({ headKey, magnitude, actual_token_delta }) => {
+              const isSelected = headKey === selectedHeadKey;
+              return (
+                <div
+                  key={headKey}
+                  style={{
+                    fontSize: 12,
+                    fontFamily: "monospace",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    background: isSelected ? "rgba(0,160,255,.1)" : undefined,
+                    border: isSelected ? "1px solid rgba(0,160,255,.3)" : "1px solid transparent",
+                    cursor: onHeadClick ? "pointer" : "default",
+                  }}
+                  onClick={() => {
+                    if (onHeadClick) {
+                      const match = headKey.match(/L(\d+)H(\d+)/);
+                      if (match) {
+                        onHeadClick(parseInt(match[1]), parseInt(match[2]));
+                      }
+                    }
+                  }}
+                >
+                  <span>{headKey}</span>
+                  <span style={{ opacity: 0.7 }}>mag: {magnitude.toFixed(2)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right: Selected head details */}
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.7 }}>
+            Selected Head: {selectedHeadKey}
+          </div>
+          {selectedHeadData ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 11, opacity: 0.7 }}>
+                Magnitude: {selectedHeadData.magnitude.toFixed(2)} |
+                Actual token Δ: {selectedHeadData.actual_token_delta.toFixed(4)}
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#2ECF8B", marginBottom: 4 }}>
+                  Top Promoted:
+                </div>
+                {selectedHeadData.top_promoted.length > 0 ? (
+                  selectedHeadData.top_promoted.slice(0, 5).map((item, i) => (
+                    <div key={i} style={{ fontSize: 11, fontFamily: "monospace", display: "flex", justifyContent: "space-between" }}>
+                      <span>{item.token || "␠"}</span>
+                      <span style={{ color: "#2ECF8B" }}>+{item.delta.toFixed(3)}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: 10, opacity: 0.5, fontStyle: "italic" }}>None</div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#d42", marginBottom: 4 }}>
+                  Top Suppressed:
+                </div>
+                {selectedHeadData.top_suppressed.length > 0 ? (
+                  selectedHeadData.top_suppressed.slice(0, 5).map((item, i) => (
+                    <div key={i} style={{ fontSize: 11, fontFamily: "monospace", display: "flex", justifyContent: "space-between" }}>
+                      <span>{item.token || "␠"}</span>
+                      <span style={{ color: "#d42" }}>{item.delta.toFixed(3)}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ fontSize: 10, opacity: 0.5, fontStyle: "italic" }}>None</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, opacity: 0.6, fontStyle: "italic" }}>No data</div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -493,6 +701,8 @@ function App() {
   const [selectedHead, setSelectedHead] = useState(0);
   const [ablationResult, setAblationResult] = useState<AblationResult | null>(null);
   const [ablationLoading, setAblationLoading] = useState(false);
+  const [highlightMode, setHighlightMode] = useState<"attention" | "value-weighted" | "delta">("attention");
+  const [computeAblations, setComputeAblations] = useState(false);
 
   const activePosition = useMemo(() => {
     if (!analysis || analysis.positions.length === 0) return null;
@@ -526,7 +736,7 @@ function App() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, top_k: topK }),
+        body: JSON.stringify({ text, top_k: topK, compute_ablations: computeAblations }),
       });
       if (!res.ok) {
         const detail = await res.json().catch(() => ({}));
@@ -607,15 +817,15 @@ function App() {
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
-              checked={showValueWeighted}
-              onChange={(evt) => setShowValueWeighted(evt.target.checked)}
+              checked={computeAblations}
+              onChange={(evt) => setComputeAblations(evt.target.checked)}
             />
-            <span>Show value-weighted attention</span>
+            <span>Compute ablations (slow!)</span>
           </label>
-          {showValueWeighted && (
+          {computeAblations && (
             <div style={{ fontSize: 12, opacity: 0.7, fontStyle: "italic" }}>
-              Value-weighted attention shows attention weights scaled by the norm of value vectors, 
-              indicating "how big a vector is moved from each position"
+              ⚠️ This will run many forward passes (layers × heads per token).
+              Enables "Head Delta" highlighting mode.
             </div>
           )}
           <button
@@ -674,13 +884,49 @@ function App() {
               onClick={handleTokenClick}
               locked={lockedIdx}
               attentionData={activePosition?.attn || null}
+              valueWeightedData={activePosition?.value_weighted_attn || null}
+              headDeltasData={activePosition?.head_deltas || null}
               selectedModel={selectedModel}
               selectedLayer={selectedLayer}
               selectedHead={selectedHead}
+              highlightMode={highlightMode}
             />
-            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
-              Hover a token (after the first) to inspect predictions. Click to lock selection.
-              {" Red background shows attention from the active position."}
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>
+                Hover a token (after the first) to inspect predictions. Click to lock selection.
+                {highlightMode === "attention" && " Red = attention weight."}
+                {highlightMode === "value-weighted" && " Red = attention × ||value|| (mechanistic info flow)."}
+                {highlightMode === "delta" && " Green = promoted by head, Red = suppressed (causal effect)."}
+              </span>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, cursor: "pointer" }}>
+                <span>Highlight:</span>
+                <select
+                  value={highlightMode}
+                  onChange={(e) => {
+                    const newMode = e.target.value as "attention" | "value-weighted" | "delta";
+                    // Don't allow delta mode if no ablations were computed
+                    if (newMode === "delta" && (!activePosition?.head_deltas || Object.keys(activePosition.head_deltas[selectedModel]).length === 0)) {
+                      return;
+                    }
+                    setHighlightMode(newMode);
+                  }}
+                  style={{
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    borderRadius: 4,
+                    border: "1px solid rgba(0,0,0,.2)",
+                  }}
+                >
+                  <option value="attention">Attention</option>
+                  <option value="value-weighted">Value-Weighted</option>
+                  <option
+                    value="delta"
+                    disabled={!activePosition?.head_deltas || Object.keys(activePosition.head_deltas[selectedModel] || {}).length === 0}
+                  >
+                    Head Delta {(!activePosition?.head_deltas || Object.keys(activePosition.head_deltas[selectedModel] || {}).length === 0) ? "(enable in form)" : ""}
+                  </option>
+                </select>
+              </label>
             </div>
           </div>
 
@@ -691,6 +937,18 @@ function App() {
                 → <strong>next:</strong> {activePosition.next_token.text || "␠"}
               </div>
               <MatchInfo position={activePosition} />
+              {activePosition.head_deltas && Object.keys(activePosition.head_deltas[selectedModel]).length > 0 && (
+                <HeadInfluencePanel
+                  position={activePosition}
+                  selectedModel={selectedModel}
+                  selectedLayer={selectedLayer}
+                  selectedHead={selectedHead}
+                  onHeadClick={(layer, head) => {
+                    setSelectedLayer(layer);
+                    setSelectedHead(head);
+                  }}
+                />
+              )}
               <TopkPanel position={activePosition} />
               {/* <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
                 <AttnPanel 
